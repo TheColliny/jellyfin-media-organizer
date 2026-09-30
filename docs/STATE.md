@@ -4,9 +4,11 @@ Last updated: 2026-09-30
 
 ## Current goal
 
-Version 0.4.0 is ready to publish. The GitHub repository exists, is public, and
-its build pipeline is proven. The only remaining action is tagging `v0.4.0` to
-cut the first public release — deliberately left to the user.
+**0.4.0 is published.** https://github.com/TheColliny/jellyfin-media-organizer/releases/tag/v0.4.0
+carries all three installers and release notes taken from CHANGELOG.md. The
+whole pipeline — tag push → three platform builds → published release — has run
+end to end successfully. Nothing is pending; the next work block starts on
+whatever comes after 0.4.0.
 
 ## Where things stand
 
@@ -23,8 +25,13 @@ cut the first public release — deliberately left to the user.
   the packages are uploaded as workflow artifacts only.
 - `.github/workflows/ci.yml` — parser/planner tests on Linux/Windows/macOS for
   Python 3.10 and 3.12, plus a `pip install -e .` packaging check.
-- Both workflows verified green. Two full dry runs of the release workflow
-  produced: windows-installer 177.5 MB, linux-deb 81.9 MB, macos-pkg 49.9 MB.
+- Both workflows verified green. Two manual dry runs plus the real `v0.4.0` tag
+  run all succeeded. Published assets: `JellyfinMediaOrganizer-Setup-0.4.0.exe`
+  (177.9 MB), `jellyfin-media-organizer_0.4.0_amd64.deb` (82.1 MB),
+  `JellyfinMediaOrganizer-0.4.0-macos-arm64.pkg` (50.1 MB).
+- `_release_asset_for_platform` was replayed against the real release JSON: it
+  resolves to the Setup EXE on win32, the arm64 PKG on darwin, and the DEB on
+  linux. The in-app updater works against the live release.
 - Commit identity for this repo is local-only:
   `TheColliny <83572066+TheColliny@users.noreply.github.com>` — the noreply
   address, so the real email stays out of a public history.
@@ -46,14 +53,14 @@ cut the first public release — deliberately left to the user.
 
 ## Open items
 
-1. **Tag the release** (user's call): `git tag v0.4.0 && git push origin v0.4.0`.
-   This publishes a release that the in-app updater on installed copies will
-   immediately start offering.
-   If the publish job fails, the build artifacts survive on the run — fix
+1. Releasing a future version is: bump `__version__` in
+   `jellyfin_organizer/__init__.py` and `version` in `pyproject.toml`, add a
+   `## X.Y.Z` section to `CHANGELOG.md`, then `git tag vX.Y.Z && git push
+   origin vX.Y.Z`. Mismatched tag/version fails the `prepare` job by design.
+   If the publish job ever fails, the build artifacts survive on the run — fix
    forward and re-run the failed job on that same run; do not delete the tag.
-2. The README release badge stays blank until the first release exists.
-3. Windows installer is 177 MB because the Windows build passes
+2. Windows installer is 178 MB because the Windows build passes
    `--collect-all PySide6`. Trimming unused Qt modules is a later follow-up;
    the Linux and macOS packages do not use that flag.
-4. macOS PKG is unsigned/unnotarized. Public distribution would want an Apple
+3. macOS PKG is unsigned/unnotarized. Public distribution would want an Apple
    Developer ID plus notarization; users currently need right-click → Open.
