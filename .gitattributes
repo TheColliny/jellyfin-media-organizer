@@ -1,0 +1,15 @@
+# Keep line endings predictable across Windows/macOS/Linux checkouts.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to stay valid for cmd.exe / Inno Setup.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.iss text eol=crlf
+
+# Shell scripts are executed on macOS/Linux runners and must stay LF.
+*.sh text eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary

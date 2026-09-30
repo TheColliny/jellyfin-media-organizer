@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Jellyfin Media Organizer
+Comment=Organize media into Jellyfin-friendly folders and filenames
+Exec=/opt/jellyfin-media-organizer/JellyfinMediaOrganizer
+Icon=jellyfin-media-organizer
+Terminal=false
+Categories=AudioVideo;Utility;
+StartupNotify=true
+StartupWMClass=JellyfinMediaOrganizer

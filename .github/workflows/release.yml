@@ -1,0 +1,228 @@
+name: Build release packages
+
+# Pushing a version tag (v0.4.0) builds every platform package and publishes a
+# GitHub Release with them attached. Running this manually from the Actions tab
+# builds the same packages and uploads them as workflow artifacts only — no
+# release is created.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  prepare:
+    name: Check version and run tests
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Read application version
+        id: version
+        run: |
+          version=$(python -c "import jellyfin_organizer; print(jellyfin_organizer.__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Application version: $version"
+
+      - name: Fail if the tag does not match the application version
+        if: github.ref_type == 'tag'
+        run: |
+          expected="v${{ steps.version.outputs.version }}"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match jellyfin_organizer.__version__ ($expected)."
+            echo "Bump __version__ in jellyfin_organizer/__init__.py (and pyproject.toml) or retag."
+            exit 1
+          fi
+
+      - name: Run tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+          python -m pytest tests/ -q
+
+  windows:
+    name: Windows installer
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      JMO_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pyinstaller
+
+      - name: Build desktop application
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed `
+            --name JellyfinMediaOrganizer `
+            --icon "jellyfin_organizer\assets\JellyfinMediaOrganizer.ico" `
+            --add-data "jellyfin_organizer\assets;jellyfin_organizer\assets" `
+            --collect-all PySide6 `
+            windows_entry.py
+
+      - name: Build background monitor
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed `
+            --name JellyfinMediaMonitor `
+            monitor_entry.py
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Setup EXE
+        env:
+          JMO_PROJECT_ROOT: ${{ github.workspace }}
+        run: |
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found" }
+          Write-Host "Using $iscc"
+          & $iscc "installer\windows\JellyfinMediaOrganizer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          $setup = "release\JellyfinMediaOrganizer-Setup-$env:JMO_VERSION.exe"
+          if (-not (Test-Path $setup)) { throw "Expected installer not found: $setup" }
+          Get-Item $setup | Format-List Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/JellyfinMediaOrganizer-Setup-*.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS package (Apple Silicon)
+    needs: prepare
+    runs-on: macos-latest
+    env:
+      JMO_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Build PKG
+        run: ./BUILD_MACOS_PKG.sh
+
+      - name: Name the package for its architecture
+        run: |
+          src="release/JellyfinMediaOrganizer-${JMO_VERSION}.pkg"
+          test -f "$src"
+          mv "$src" "release/JellyfinMediaOrganizer-${JMO_VERSION}-macos-arm64.pkg"
+          ls -lh release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          path: release/JellyfinMediaOrganizer-*-macos-arm64.pkg
+          if-no-files-found: error
+
+  linux:
+    name: Debian/Ubuntu package
+    needs: prepare
+    # Built on the oldest supported runner so the package works on newer glibc too.
+    runs-on: ubuntu-22.04
+    env:
+      JMO_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
+
+      - name: Build DEB
+        run: ./BUILD_LINUX_DEB.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: release/jellyfin-media-organizer_*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: github.ref_type == 'tag'
+    needs: [prepare, windows, macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh assets/
+
+      - name: Extract release notes for this version
+        id: notes
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+
+          version = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = f"## {version}"
+          body = ""
+          if heading in text:
+              after = text.split(heading, 1)[1]
+              body = after.split("\n## ", 1)[0].strip().rstrip("-").strip()
+          pathlib.Path("RELEASE_BODY.md").write_text(body, encoding="utf-8")
+          print("found" if body else "empty")
+          PY
+          if [ -s RELEASE_BODY.md ]; then
+            echo "have_notes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_notes=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ steps.notes.outputs.have_notes }}" = "true" ]; then
+            notes_args="--notes-file RELEASE_BODY.md"
+          else
+            notes_args="--generate-notes"
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Jellyfin Media Organizer $VERSION" \
+            $notes_args \
+            assets/*
